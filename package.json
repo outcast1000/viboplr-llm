@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "name": "viboplr-llm-tests",
+  "description": "Test harness for the viboplr-llm plugin (not published; the plugin itself is just index.js + manifest.json).",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check index.js",
+    "package": "scripts/package.sh"
+  }
+}
