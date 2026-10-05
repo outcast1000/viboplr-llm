@@ -3,7 +3,7 @@
   "name": "AI Assistant",
   "version": "0.2.0",
   "author": "Viboplr",
-  "description": "An AI assistant inside Viboplr, running on your own model: a local one (Ollama, LM Studio, llama.cpp) or any OpenAI-compatible service. Ask for music in plain words, fill albums, find upgrades, tidy messy titles and tags, and read about what's playing. It uses the same tools an outside AI assistant gets, and asks before changing anything.",
+  "description": "An AI assistant inside Viboplr, running on your own model: a local one (Ollama, LM Studio, llama.cpp), Claude, OpenAI, Grok or any OpenAI-compatible service. Ask for music in plain words, fill albums, find upgrades, tidy messy titles and tags, and read about what's playing. It uses the same tools an outside AI assistant gets, and asks before changing anything.",
   "minAppVersion": "1.0.90",
   "stability": "experimental",
   "homepage": "https://github.com/outcast1000/viboplr-llm",
@@ -17,7 +17,7 @@
     { "api": "assistant.host.invoke", "reason": "Use Viboplr's own AI tools (search, play, tags, downloads…) — the same ones an outside assistant gets, behind the same AI control switches" },
     { "api": "informationTypes.getValue", "reason": "Read a track's cached lyrics to explain or translate them" },
     { "api": "informationTypes.fetch", "reason": "Fetch lyrics through your lyrics providers when none are cached yet" },
-    { "api": "storage.set", "reason": "Remember your endpoint, key and model" }
+    { "api": "storage.set", "reason": "Remember your provider, endpoint, API keys and model" }
   ],
   "contributes": {
     "sidebarItems": [

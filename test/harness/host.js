@@ -20,7 +20,8 @@ function makeHost(opts = {}) {
     async fetch(url, init) {
       record("network.fetch", [url, init]);
       if (opts.fetch) return opts.fetch(url, init);
-      if (/\/models$/.test(url)) {
+      if (/\/models(\?|$)/.test(url)) {
+        if (opts.modelsStatus) return response(opts.modelsStatus, { error: { message: "invalid x-api-key" } });
         return response(200, { data: (opts.models || ["qwen3:14b"]).map((id) => ({ id })) });
       }
       if (/\/chat\/completions$/.test(url)) {

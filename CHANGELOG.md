@@ -5,6 +5,10 @@
 - The chat looks like a chat: your messages as bubbles on the right, answers as formatted text (headings, lists, tables, code, links) with a Copy button, and the composer pinned to the bottom (Enter sends, Shift+Enter adds a line).
 - Tool calls fold into the answer they belong to — one "Used 3 tools" row per turn, click to see each call and any error. The approval card sits inline in the thread.
 - Stop is the send button while an answer runs, and it stops at once — before, it waited for the model to finish its current reply (minutes on a slow local model), and the next message could revive the stopped turn. A reply that arrives after Stop is dropped and runs nothing. Stop also cancels the request itself, so the model server stops generating. "+" starts a new chat; the model name under the composer opens Settings.
+- Pictures in the chat: ask for the current artist's photo or an album cover and it shows up in the answer. Image data no longer goes to the model as text (it used to be cut off mid-way and waste its context) — the model just hears that the picture was shown.
+- Providers: Settings starts with a Provider choice — Ollama, LM Studio, Claude (Anthropic), OpenAI, Grok (xAI), or any other OpenAI-compatible service. Hosted presets fill in the address; each provider keeps its own API key (a 0.1.x key moves to the provider its endpoint belonged to).
+- Claude works: its model list loads (it needs Anthropic's own key header), and replies are capped at 8192 tokens, which Anthropic requires. OpenAI gets `max_completion_tokens` (newer models refuse `max_tokens`) and a model list without embedding, speech and image models.
+- When a service can't list its models, type the model id instead of being stuck.
 - Needs Viboplr 1.0.90 or newer (the host's new chat view).
 
 ## 0.1.0

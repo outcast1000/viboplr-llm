@@ -1,8 +1,8 @@
 # AI Assistant for Viboplr
 
 An AI assistant inside [Viboplr](https://github.com/outcast1000/viboplr), running on
-**your own model** — a local one (Ollama, LM Studio, llama.cpp server) or any
-OpenAI-compatible service.
+**your own model** — a local one (Ollama, LM Studio, llama.cpp server), Claude,
+OpenAI, Grok, or any other OpenAI-compatible service.
 
 - **Chat** — "play something mellow for a rainy Sunday, nothing I played this week",
   "which songs did I like but forget?", "tidy up my genre tags".
@@ -32,6 +32,28 @@ the web (it cites the page).
 
 ## Setup
 
+Open **AI Assistant → Settings** and pick a **Provider**:
+
+| Provider | What you need |
+|---|---|
+| Ollama / LM Studio | The app running on this computer (see below). Free, private. |
+| Claude (Anthropic) | An API key from platform.claude.com → Settings → API keys (pay as you go). A Claude.ai Pro/Max subscription doesn't work here. |
+| OpenAI | An API key from platform.openai.com. |
+| Grok (xAI) | An API key from console.x.ai. |
+| Other | Any OpenAI-compatible endpoint with tool calling, and its key if it needs one. |
+
+Paste the key, press **Save and connect**, and pick a model. If the service
+doesn't list its models, type the model id. Each provider keeps its own key, so
+switching back and forth doesn't lose one. Hosted services bill you per use; every
+turn sends the tool descriptions, so a long agentic answer costs more than a chat
+reply.
+
+Claude, OpenAI and Grok are reached through their OpenAI-compatible endpoints.
+For Claude that endpoint ignores "answer in JSON" (the Meaning tab copes) and has
+no prompt caching.
+
+### A local model
+
 1. Run a model that supports tool calling, e.g. with Ollama:
    ```
    brew install ollama && brew services start ollama
@@ -41,9 +63,8 @@ the web (it cites the page).
    (`OLLAMA_CONTEXT_LENGTH=32768`) — the tool descriptions take room.
 2. In Viboplr, turn on **Settings → General → AI control**.
 3. Install this plugin, approve its permissions, open **AI Assistant** →
-   **Settings**, and press **Save and connect**. The default endpoint is Ollama's
-   (`http://127.0.0.1:11434/v1`); LM Studio is `http://127.0.0.1:1234/v1`. A hosted
-   service takes its base URL and an API key.
+   **Settings**, pick **Ollama** (or **LM Studio**) and press **Save and connect**.
+   Change the endpoint only if your server isn't at the default address.
 
 ## Permissions
 

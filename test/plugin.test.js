@@ -34,6 +34,29 @@ test("activate renders the chat, registers its surfaces and checks the endpoint"
   assert.deepEqual(host.ui.headers.assistant.status, { variant: "success", label: "Ready" });
 });
 
+test("an image a tool returns shows in the chat, and the model gets a note instead of the data", async () => {
+  const { host } = await activated({
+    hostTools: HOST_TOOLS.concat([
+      { name: "get_entity_image", description: "Image", inputSchema: { type: "object", properties: {} }, readOnly: true, categories: ["info"] },
+    ]),
+    modelReplies: [
+      { content: "", tool_calls: [toolCall("get_entity_image", { kind: "artist", name: "Björk" }, "a")] },
+      { content: "Here's Björk.", tool_calls: [] },
+    ],
+    invoke: async () => ({ content: [{ type: "image", data: "QUJD", mimeType: "image/jpeg" }] }),
+  });
+  host.ui.actions.send({ query: "show me the current artist" });
+  await flush();
+
+  const chat = host.ui.views.assistant.children.find((n) => n.type === "chat");
+  const turn = chat.messages[1];
+  assert.deepEqual(turn.images, [{ src: "data:image/jpeg;base64,QUJD", alt: "Björk" }]);
+  assert.equal(turn.text, "Here's Björk.");
+  const toolMsg = host.modelRequests[1].messages.find((m) => m.role === "tool");
+  assert.ok(!toolMsg.content.includes("QUJD"), "no base64 sent to the model");
+  assert.match(toolMsg.content, /shown to the user/);
+});
+
 test("Stop ends the turn at once, even while the model call is still running", async () => {
   let open;
   const gate = new Promise((r) => { open = r; });
@@ -194,17 +217,102 @@ test("the complete tool runs one prompt with no tools", async () => {
 test("settings: Save and connect normalises the URL, keeps the key out of the view", async () => {
   const { host } = await activated();
   host.ui.actions.tab({ tabId: "settings" });
-  host.ui.actions["set-baseUrl"]({ value: "localhost:1234/v1/" });
+  host.ui.actions["set-provider"]({ value: "custom" });
+  host.ui.actions["set-baseUrl"]({ value: "llm.example.com/v1/" });
   host.ui.actions["set-apiKey"]({ value: " sk-test " });
   host.ui.actions.connect();
   await flush();
-  assert.equal(host.storage.settings.baseUrl, "http://localhost:1234/v1");
-  assert.equal(host.storage.settings.apiKey, "sk-test");
+  assert.equal(host.storage.settings.baseUrl, "http://llm.example.com/v1");
+  assert.deepEqual(host.storage.settings.keys, { custom: "sk-test" });
   const lastModels = host.calls.filter((c) => c.name === "network.fetch").pop();
-  assert.equal(lastModels.args[0], "http://localhost:1234/v1/models");
+  assert.equal(lastModels.args[0], "http://llm.example.com/v1/models");
   assert.equal(lastModels.args[1].headers.Authorization, "Bearer sk-test");
   assert.ok(!JSON.stringify(host.ui.headers.assistant).includes("sk-test"));
   assert.ok(!host.calls.some((c) => c.name === "log" && /sk-test/.test(c.args[1])));
+});
+
+const settingsView = (host) => host.ui.views.assistant.children;
+const lastFetch = (host, re) => host.calls.filter((c) => c.name === "network.fetch" && re.test(c.args[0])).pop();
+
+test("Claude: pick the provider, add a key, the models load and the chat sends a length cap", async () => {
+  const { host } = await activated({
+    models: ["claude-sonnet-5-5", "claude-haiku-4-5"],
+    modelReplies: [{ content: "Hi.", tool_calls: [] }],
+  });
+  host.ui.actions.tab({ tabId: "settings" });
+  host.ui.actions["set-provider"]({ value: "anthropic" });
+  await flush();
+  assert.equal(host.storage.settings.baseUrl, "https://api.anthropic.com/v1");
+  assert.equal(host.storage.settings.model, "", "an Ollama model id means nothing to Anthropic");
+  assert.deepEqual(host.ui.headers.assistant.status, { variant: "warning", label: "Needs a key" });
+  assert.ok(!settingsView(host).some((n) => n.label === "Endpoint"), "hosted presets don't show an endpoint");
+
+  host.ui.actions["set-apiKey"]({ value: "sk-ant-x" });
+  host.ui.actions.connect();
+  await flush();
+  const list = lastFetch(host, /\/models/);
+  assert.equal(list.args[0], "https://api.anthropic.com/v1/models?limit=100");
+  assert.equal(list.args[1].headers["x-api-key"], "sk-ant-x", "Anthropic's model list wants x-api-key");
+  assert.equal(list.args[1].headers["anthropic-version"], "2023-06-01");
+  assert.equal(host.storage.settings.model, "claude-sonnet-5-5", "newest-first order kept");
+
+  host.ui.actions.send({ query: "hello" });
+  await flush();
+  assert.equal(host.modelRequests[0].max_tokens, 8192, "Anthropic requires a reply cap");
+  assert.equal(host.modelRequests[0].model, "claude-sonnet-5-5");
+});
+
+test("each provider keeps its own key; OpenAI gets max_completion_tokens and only chat models", async () => {
+  const { host } = await activated({
+    models: ["gpt-5", "text-embedding-3-large", "whisper-1", "o4-mini", "dall-e-3"],
+    modelReplies: [{ content: "Hi.", tool_calls: [] }],
+  });
+  host.ui.actions.tab({ tabId: "settings" });
+  host.ui.actions["set-provider"]({ value: "openai" });
+  host.ui.actions["set-apiKey"]({ value: "sk-openai" });
+  host.ui.actions.connect();
+  await flush();
+  const model = settingsView(host).find((n) => n.type === "select" && n.label === "Model");
+  assert.deepEqual(model.options.map((o) => o.value), ["gpt-5", "o4-mini"]);
+
+  host.ui.actions.send({ query: "hello" });
+  await flush();
+  assert.equal(host.modelRequests[0].max_completion_tokens, 8192);
+  assert.equal(host.modelRequests[0].max_tokens, undefined);
+
+  host.ui.actions["set-provider"]({ value: "anthropic" });
+  await flush();
+  const keyRow = settingsView(host).find((n) => n.label === "API key");
+  assert.equal(keyRow.control.value, "", "the OpenAI key isn't offered to Anthropic");
+  host.ui.actions["set-provider"]({ value: "openai" });
+  await flush();
+  assert.equal(settingsView(host).find((n) => n.label === "API key").control.value, "sk-openai");
+});
+
+test("when the model list fails, the model can be typed", async () => {
+  const { host } = await activated({ modelsStatus: 401, modelReplies: [{ content: "Hi.", tool_calls: [] }] });
+  host.ui.actions.tab({ tabId: "settings" });
+  host.ui.actions["set-provider"]({ value: "xai" });
+  host.ui.actions["set-apiKey"]({ value: "xai-key" });
+  host.ui.actions.connect();
+  await flush();
+  const row = settingsView(host).find((n) => n.label === "Model");
+  assert.equal(row.type, "settings-row");
+  assert.equal(row.control.type, "text-input", "typed, since there is no list");
+
+  host.ui.actions["set-model"]({ value: " grok-test " });
+  host.ui.actions.send({ query: "hello" });
+  await flush();
+  assert.equal(host.modelRequests[0].model, "grok-test");
+  assert.equal(host.modelRequests[0].max_tokens, undefined, "no cap for a provider that doesn't need one");
+});
+
+test("a 0.1.x single API key moves to the provider its endpoint belongs to", async () => {
+  const { host } = await activated({ storage: { settings: { baseUrl: "https://api.openai.com/v1", apiKey: "sk-old", model: "gpt-5" } } });
+  const list = lastFetch(host, /\/models/);
+  assert.equal(list.args[1].headers.Authorization, "Bearer sk-old");
+  host.ui.actions.tab({ tabId: "settings" });
+  assert.equal(settingsView(host).find((n) => n.label === "Provider").value, "openai");
 });
 
 test("a context-menu errand opens the view and starts its own conversation", async () => {
