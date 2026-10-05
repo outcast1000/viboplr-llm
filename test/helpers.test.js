@@ -89,6 +89,28 @@ test("modelIds filters and orders per provider", () => {
   assert.deepEqual(plugin._modelIds({ models: [{ name: "b" }, { name: "a" }] }, null), ["a", "b"]);
 });
 
+test("modelInfo reads OpenRouter prices; modelMatches filters by words and free", () => {
+  const info = plugin._modelInfo({
+    data: [
+      { id: "anthropic/claude-sonnet-5.5", name: "Anthropic: Claude Sonnet 5.5", pricing: { prompt: "0.000003", completion: "0.000015" } },
+      { id: "meta-llama/llama-3.3-70b-instruct:free", name: "Meta: Llama 3.3 70B (free)", pricing: { prompt: "0", completion: "0" } },
+      { id: "openrouter/auto", name: "Auto Router", pricing: { prompt: "-1", completion: "-1" } },
+      { id: "qwen3:14b" },
+    ],
+  });
+  assert.deepEqual(info["anthropic/claude-sonnet-5.5"], { name: "Anthropic: Claude Sonnet 5.5", free: false, price: "$3 / $15 per 1M tokens" });
+  assert.equal(info["meta-llama/llama-3.3-70b-instruct:free"].free, true);
+  assert.deepEqual(info["openrouter/auto"], { name: "Auto Router", free: false, price: "" }, "a variable price is neither free nor shown");
+  assert.equal(info["qwen3:14b"], undefined, "no pricing, no entry");
+
+  const llama = info["meta-llama/llama-3.3-70b-instruct:free"];
+  assert.ok(plugin._modelMatches("meta-llama/llama-3.3-70b-instruct:free", llama, "llama 70b", false), "every word, any order");
+  assert.ok(plugin._modelMatches("anthropic/claude-sonnet-5.5", info["anthropic/claude-sonnet-5.5"], "SONNET", false), "case-insensitive");
+  assert.ok(!plugin._modelMatches("anthropic/claude-sonnet-5.5", info["anthropic/claude-sonnet-5.5"], "sonnet llama", false));
+  assert.ok(!plugin._modelMatches("anthropic/claude-sonnet-5.5", info["anthropic/claude-sonnet-5.5"], "", true), "paid hidden by free-only");
+  assert.ok(plugin._modelMatches("meta-llama/llama-3.3-70b-instruct:free", llama, "", true));
+});
+
 test("takeImages moves pictures to the chat and leaves the model a note", () => {
   const out = plugin._takeImages({ content: [{ type: "image", data: "AAAA", mimeType: "image/jpeg" }] }, "get_entity_image", "Björk");
   assert.deepEqual(out.images, [{ src: "data:image/jpeg;base64,AAAA", alt: "Björk" }]);

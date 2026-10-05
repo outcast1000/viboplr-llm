@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1
+
+- Find a model: a long model list (OpenRouter's has hundreds) gets a filter box above it. Type any words, in any order ("llama 70b", "claude sonnet"), and the Model and Fast model lists narrow to the matches, with a "Showing N of M" count.
+- Prices: on OpenRouter each model shows its price (input / output, USD per 1M tokens), or "free".
+- A "Free models only" switch, when the service has free models. The model you've chosen stays in the list either way.
+- Fixed: on OpenRouter you could pick a model and chat with no API key saved (its model list loads without one), and got "Missing authentication header". The status now says "Needs a key" until one is saved, the chat says the key is missing instead of sending the request, and a key typed but not yet saved with Save and connect is kept when you pick a model.
+- A refused key (HTTP 401) now says to check the key in Settings.
+- Approve all: the approval card gets an "Approve all in this chat" button (Viboplr 1.0.91 or newer). The rest of that chat's changes run without asking; a strip above the thread says so, with "Ask again", and the header gets an "Ask before changes" button. A new chat — or a context-menu errand, which starts one — always asks again. Settings → General → AI control still decides what the assistant may do at all.
+- New chat is a button in the view header, and it works while an answer is running or an approval is waiting (it stops the answer and declines the pending change). The composer's "+" does the same on Viboplr 1.0.91+.
+
 ## 0.3.0
 
 - OpenRouter is a provider: pick it in Settings, paste a key from openrouter.ai, and choose from the models that can call tools (the assistant needs them; the rest of OpenRouter's several hundred aren't listed, nor its slow half-price `:batch` routes). It doesn't pick a model for you — on OpenRouter the first one listed is arbitrary and may be paid. Settings saved under "Other" with OpenRouter's address move to the preset by themselves.

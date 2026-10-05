@@ -128,6 +128,7 @@ var PROVIDERS = [
   { id: "custom", label: "Other (OpenAI-compatible)", baseUrl: null },
 ];
 var MAX_REPLY_TOKENS = 8192;
+var MODEL_FILTER_MIN = 20; // a model list longer than this gets a filter box
 
 function providerById(id) {
   return PROVIDERS.filter(function (p) { return p.id === id; })[0] || null;
@@ -497,7 +498,11 @@ var ui = {
   busy: false,
   busySince: 0,
   pending: null, // { name, args, resolve }
+  approveAll: false, // "Approve all" for the current conversation; any new conversation asks again
   models: [],
+  modelInfo: {}, // id → { name, free, price } when the service's list carries pricing (OpenRouter)
+  modelFilter: "",
+  freeOnly: false,
   modelsError: "",
   status: null, // { variant, label }
   draftBaseUrl: null,
@@ -531,6 +536,16 @@ function currentWorkspace() {
   return (settings.workspaces && settings.workspaces[currentProvider().id]) || "";
 }
 
+/** A provider that needs a key, with none saved. */
+function missingKey() {
+  return !!currentProvider().needsKey && !currentKey();
+}
+
+function readyStatus() {
+  if (missingKey()) return { variant: "warning", label: "Needs a key" };
+  return settings.model ? { variant: "success", label: "Ready" } : { variant: "warning", label: "No model" };
+}
+
 function authHeaders() {
   var h = { "Content-Type": "application/json" };
   var provider = currentProvider();
@@ -560,6 +575,7 @@ function readJson(res) {
     }
     if (res.status < 200 || res.status >= 300) {
       var detail = json && json.error ? (json.error.message || JSON.stringify(json.error)) : truncate(text, 300);
+      if (res.status === 401) throw new Error("The model service didn't accept the API key (HTTP 401)" + (detail ? ": " + detail : "") + ". Check the key in the Settings tab and press Save and connect.");
       if (res.status === 402) throw new Error("The model service says the account is out of credits (HTTP 402)" + (detail ? ": " + detail : "") + ". Add credits there, or pick a free model.");
       throw new Error("The model endpoint answered HTTP " + res.status + (detail ? ": " + detail : ""));
     }
@@ -580,6 +596,11 @@ function chat(messages, toolsSpec, opts) {
   var model = (o.fast && settings.fastModel) || settings.model;
   if (!api) return Promise.reject(new Error("The assistant was turned off"));
   if (!model) return Promise.reject(new Error("Pick a model first, in the Settings tab."));
+  // A public model list (OpenRouter's) loads without a key, so a model can be
+  // chosen with none saved; say so instead of sending an unauthenticated request.
+  if (missingKey()) {
+    return Promise.reject(new Error(currentProvider().label + " needs an API key: paste it in the Settings tab and press Save and connect."));
+  }
   var body = { model: model, messages: messages, stream: false };
   var cap = currentProvider().maxTokensField;
   if (cap) body[cap] = MAX_REPLY_TOKENS;
@@ -615,7 +636,47 @@ function listModels() {
     })
     .catch(function (e) { throw connectionError(e); })
     .then(readJson)
-    .then(function (json) { return modelIds(json, provider); });
+    .then(function (json) { return { ids: modelIds(json, provider), info: modelInfo(json) }; });
+}
+
+/**
+ * Display name and price per model, from a /models answer that carries them
+ * (OpenRouter: `pricing.prompt` / `pricing.completion` are USD per token, as
+ * strings; a negative price means "varies", e.g. its auto router). Free means
+ * both are zero. Services without pricing give an empty map.
+ */
+function modelInfo(json) {
+  var out = {};
+  ((json && json.data) || []).forEach(function (m) {
+    if (!m || !m.id || !m.pricing) return;
+    var inP = parseFloat(m.pricing.prompt);
+    var outP = parseFloat(m.pricing.completion);
+    var known = isFinite(inP) && isFinite(outP) && inP >= 0 && outP >= 0;
+    out[m.id] = {
+      name: m.name || "",
+      free: known && inP === 0 && outP === 0,
+      price: known && !(inP === 0 && outP === 0) ? perMillion(inP) + " / " + perMillion(outP) + " per 1M tokens" : "",
+    };
+  });
+  return out;
+}
+
+function perMillion(perToken) {
+  var v = perToken * 1e6;
+  return "$" + (v >= 10 ? String(Math.round(v * 10) / 10) : String(Math.round(v * 100) / 100));
+}
+
+/** Every word of the filter appears in the id or the display name. */
+function modelMatches(id, info, filter, freeOnly) {
+  if (freeOnly && !(info && info.free)) return false;
+  var hay = (id + " " + ((info && info.name) || "")).toLowerCase();
+  return String(filter || "").toLowerCase().split(/\s+/).filter(Boolean).every(function (w) { return hay.indexOf(w) !== -1; });
+}
+
+function modelLabel(id, info) {
+  if (!info) return id;
+  if (info.free) return id + " · free";
+  return info.price ? id + " · " + info.price : id;
 }
 
 /** A /models answer → the ids worth offering. Anthropic lists newest first; keep that. */
@@ -722,6 +783,7 @@ function recordStep(turn, ev) {
 }
 
 function confirmCall(call) {
+  if (ui.approveAll) return Promise.resolve(true);
   return new Promise(function (resolve) {
     ui.pending = { name: call.name, args: call.args, resolve: resolve };
     render();
@@ -741,7 +803,7 @@ function sendMessage(text, featureId) {
   if (!msg || ui.busy) return;
   if (featureId && featureId !== conversationFeature && conversation.length) {
     // A context-menu errand starts its own conversation.
-    conversation = [];
+    resetConversation();
   }
   if (featureId) conversationFeature = featureId;
   var feature = FEATURES[conversationFeature] || FEATURES.chat;
@@ -838,9 +900,19 @@ function stopTurn() {
   render();
 }
 
-function newChat() {
-  if (ui.busy) return;
+/**
+ * A fresh conversation for the model. "Approve all" was given for the old one,
+ * so it ends here too.
+ */
+function resetConversation() {
   conversation = [];
+  ui.approveAll = false;
+}
+
+/** New chat works mid-answer too: stop the turn (declining a pending approval), then start over. */
+function newChat() {
+  if (ui.busy) stopTurn();
+  resetConversation();
   conversationFeature = "chat";
   ui.transcript = [];
   render();
@@ -877,17 +949,20 @@ function refreshModels() {
   ui.status = { variant: "muted", label: "Checking…" };
   render();
   return listModels().then(
-    function (models) {
+    function (list) {
+      var models = list.ids;
       ui.models = models;
+      ui.modelInfo = list.info;
       if (!settings.model && models.length && !currentProvider().noAutoPick) {
         settings.model = models[0];
         saveSettings();
       }
-      ui.status = settings.model ? { variant: "success", label: "Ready" } : { variant: "warning", label: "No model" };
+      ui.status = readyStatus();
       render();
     },
     function (e) {
       ui.models = [];
+      ui.modelInfo = {};
       ui.modelsError = errorText(e);
       ui.status = { variant: "error", label: "Offline" };
       render();
@@ -915,6 +990,8 @@ function chatNode() {
     notice = { message: "This version of Viboplr can't lend its tools to plugins. Update the app to use the assistant." };
   } else if (!settings.model) {
     notice = { message: "No model chosen yet.", actionLabel: "Open Settings", action: "tab:settings" };
+  } else if (ui.approveAll) {
+    notice = { message: "Approving every action in this chat without asking.", actionLabel: "Ask again", action: "ask-again" };
   }
   var last = ui.transcript[ui.transcript.length - 1];
   var working = !!(last && last.steps && last.steps.some(function (st) { return st.status === "running"; }));
@@ -938,7 +1015,15 @@ function chatNode() {
     notice: notice,
     status: ui.busy && !ui.pending ? { label: working ? "Working…" : "Thinking…", since: ui.busySince } : null,
     approval: ui.pending
-      ? { title: "Approve this action?", message: describeCall(ui.pending.name, ui.pending.args), approveAction: "approve", denyAction: "deny" }
+      ? {
+          title: "Approve this action?",
+          message: describeCall(ui.pending.name, ui.pending.args),
+          approveAction: "approve",
+          denyAction: "deny",
+          // App 1.0.91+ draws it; older ones show Approve / Deny only.
+          approveAllAction: "approve-all",
+          approveAllLabel: "Approve all in this chat",
+        }
       : null,
     composer: {
       action: "send",
@@ -954,7 +1039,16 @@ function chatNode() {
 }
 
 function settingsNodes() {
-  var modelOptions = ui.models.map(function (m) { return { value: m, label: m }; });
+  // A long list (OpenRouter offers hundreds) gets a filter box; one with prices
+  // gets a free-only switch. The chosen model always stays in the list.
+  var filterable = ui.models.length > MODEL_FILTER_MIN;
+  var priced = ui.models.some(function (m) { return ui.modelInfo[m]; });
+  var anyFree = ui.models.some(function (m) { return ui.modelInfo[m] && ui.modelInfo[m].free; });
+  var shown = ui.models.filter(function (m) {
+    if (m === settings.model) return true;
+    return modelMatches(m, ui.modelInfo[m], filterable ? ui.modelFilter : "", anyFree && ui.freeOnly);
+  });
+  var modelOptions = shown.map(function (m) { return { value: m, label: modelLabel(m, ui.modelInfo[m]) }; });
   if (settings.model && ui.models.indexOf(settings.model) === -1) modelOptions.unshift({ value: settings.model, label: settings.model });
   if (!settings.model && modelOptions.length) modelOptions.unshift({ value: "", label: "Choose a model…" });
   var fastOptions = [{ value: "", label: "Same as the main model" }].concat(modelOptions.filter(function (o) { return o.value && o.value !== settings.model; }));
@@ -1005,6 +1099,26 @@ function settingsNodes() {
   var modelHint = provider.local
     ? "Pick one that supports tool calling (e.g. qwen3, llama3.1, mistral-small)."
     : "The model that answers in the chat. It must support tool calling.";
+  if (ui.models.length && (filterable || anyFree)) {
+    var matching = shown.filter(function (m) { return m !== settings.model || modelMatches(m, ui.modelInfo[m], ui.modelFilter, anyFree && ui.freeOnly); }).length;
+    nodes.push({
+      type: "settings-row",
+      label: "Find a model",
+      description: matching === ui.models.length
+        ? ui.models.length + " models" + (priced ? ", prices in USD (input / output)." : ".")
+        : "Showing " + matching + " of " + ui.models.length + " models.",
+      control: filterable ? { type: "search-input", placeholder: "e.g. claude, llama 70b, qwen", action: "set-modelFilter", value: ui.modelFilter } : undefined,
+    });
+    if (anyFree) {
+      nodes.push({
+        type: "toggle",
+        label: "Free models only",
+        description: "Free models have tight daily limits, and one answer can take several requests.",
+        action: "set-freeOnly",
+        checked: ui.freeOnly,
+      });
+    }
+  }
   if (modelOptions.length) {
     nodes.push({ type: "select", label: "Model", description: modelHint, action: "set-model", value: settings.model, options: modelOptions });
     nodes.push({ type: "select", label: "Fast model", description: "Optional, for one-shot jobs like Meaning.", action: "set-fastModel", value: settings.fastModel, options: fastOptions });
@@ -1044,6 +1158,11 @@ function render() {
     api.ui.setViewHeader(VIEW_ID, {
       subtitle: settings.model ? settings.model + " · " + (currentProvider().local || !currentProvider().baseUrl ? hostOf(settings.baseUrl) : currentProvider().label) : "No model chosen",
       status: ui.status || undefined,
+      // In the header so both stay reachable from either tab and on any app
+      // version: New chat even mid-answer, and a way to take back Approve all.
+      actions: [{ label: "New chat", action: "new-chat", variant: "secondary" }].concat(
+        ui.approveAll ? [{ label: "Ask before changes", action: "ask-again", variant: "secondary" }] : []
+      ),
     });
   }
   if (typeof api.ui.setBadge === "function") {
@@ -1053,8 +1172,9 @@ function render() {
 
 // api.ui.onAction is keyed by action id, so every id the view emits is listed.
 var VIEW_ACTIONS = [
-  "tab", "tab:settings", "send", "quick", "approve", "deny", "stop", "new-chat",
+  "tab", "tab:settings", "send", "quick", "approve", "approve-all", "ask-again", "deny", "stop", "new-chat",
   "set-provider", "set-baseUrl", "set-apiKey", "set-workspaceId", "connect", "set-model", "set-fastModel", "set-maxSteps",
+  "set-modelFilter", "set-freeOnly",
 ];
 
 function onViewAction(actionId, data) {
@@ -1071,11 +1191,17 @@ function onViewAction(actionId, data) {
   } else if (actionId === "quick") {
     var q = QUICK_PROMPTS.filter(function (x) { return x.id === d.id; })[0];
     if (q) {
-      conversation = [];
+      resetConversation();
       sendMessage(q.text, q.feature);
     }
   } else if (actionId === "approve") {
     settlePending(true);
+  } else if (actionId === "approve-all") {
+    ui.approveAll = true;
+    settlePending(true);
+  } else if (actionId === "ask-again") {
+    ui.approveAll = false;
+    render();
   } else if (actionId === "deny") {
     settlePending(false);
   } else if (actionId === "stop") {
@@ -1091,6 +1217,9 @@ function onViewAction(actionId, data) {
       settings.model = "";
       settings.fastModel = "";
       ui.models = [];
+      ui.modelInfo = {};
+      ui.modelFilter = "";
+      ui.freeOnly = false;
       ui.modelsError = "";
       ui.draftBaseUrl = null;
       ui.draftApiKey = null;
@@ -1119,8 +1248,20 @@ function onViewAction(actionId, data) {
     saveSettings().then(refreshModels);
   } else if (actionId === "set-model") {
     settings.model = String(d.value || "").trim();
+    // A key typed but not yet saved with "Save and connect": picking a model is
+    // the user moving on, so keep the key rather than chat without one.
+    if (ui.draftApiKey !== null) {
+      settings.keys[currentProvider().id] = ui.draftApiKey.trim();
+      ui.draftApiKey = null;
+    }
     saveSettings();
-    ui.status = settings.model ? { variant: "success", label: "Ready" } : ui.status;
+    ui.status = readyStatus();
+    render();
+  } else if (actionId === "set-modelFilter") {
+    ui.modelFilter = String(d.query != null ? d.query : d.value || "");
+    render();
+  } else if (actionId === "set-freeOnly") {
+    ui.freeOnly = typeof d.value === "boolean" ? d.value : !ui.freeOnly; // the host sends { value: !checked }
     render();
   } else if (actionId === "set-fastModel") {
     settings.fastModel = String(d.value || "").trim();
@@ -1222,7 +1363,7 @@ function onMenuAction(actionId, target) {
     render();
     return;
   }
-  conversation = [];
+  resetConversation();
   ui.transcript = [];
   sendMessage(p.text, p.feature);
 }
@@ -1257,6 +1398,7 @@ function activate(pluginApi) {
 function deactivate() {
   if (ui.pending) ui.pending.resolve(false);
   ui.pending = null;
+  ui.approveAll = false;
   if (turnAbort) turnAbort.abort();
   turnAbort = null;
   turnGen++; // any turn still running is stale now
@@ -1289,6 +1431,8 @@ return {
   _providerForUrl: providerForUrl,
   _modelIds: modelIds,
   _PROVIDERS: PROVIDERS,
+  _modelInfo: modelInfo,
+  _modelMatches: modelMatches,
   _runAgent: runAgent,
   _groundTrackIds: groundTrackIds,
   _rowToPluginTrack: rowToPluginTrack,

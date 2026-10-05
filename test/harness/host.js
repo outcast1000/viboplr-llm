@@ -22,7 +22,7 @@ function makeHost(opts = {}) {
       if (opts.fetch) return opts.fetch(url, init);
       if (/\/models(\?|$)/.test(url)) {
         if (opts.modelsStatus) return response(opts.modelsStatus, { error: { message: "invalid x-api-key" } });
-        return response(200, { data: (opts.models || ["qwen3:14b"]).map((id) => ({ id })) });
+        return response(200, { data: (opts.models || ["qwen3:14b"]).map((m) => (typeof m === "string" ? { id: m } : m)) });
       }
       if (/\/chat\/completions$/.test(url)) {
         const body = JSON.parse(init.body);

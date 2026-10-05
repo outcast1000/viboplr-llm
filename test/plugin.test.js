@@ -359,6 +359,145 @@ test("OpenRouter: only tool-capable models, no auto-picked model, attribution he
   assert.equal(lastFetch(host, /\/models/).args[1].headers["X-OpenRouter-Title"], undefined, "never sent to another service");
 });
 
+test("OpenRouter: a long model list can be filtered by name and to free models, with prices in the labels", async () => {
+  const paid = Array.from({ length: 25 }, (_, i) => ({ id: "vendor/model-" + i, name: "Vendor: Model " + i, pricing: { prompt: "0.000001", completion: "0.000002" } }));
+  const { host } = await activated({
+    models: paid.concat([{ id: "meta-llama/llama-3.3-70b-instruct:free", name: "Meta: Llama 3.3 70B (free)", pricing: { prompt: "0", completion: "0" } }]),
+  });
+  host.ui.actions.tab({ tabId: "settings" });
+  host.ui.actions["set-provider"]({ value: "openrouter" });
+  host.ui.actions["set-apiKey"]({ value: "sk-or-x" });
+  host.ui.actions.connect();
+  await flush();
+  const modelSelect = () => settingsView(host).find((n) => n.type === "select" && n.label === "Model");
+  const find = () => settingsView(host).find((n) => n.label === "Find a model");
+  assert.equal(find().control.type, "search-input");
+  assert.match(find().description, /^26 models/);
+  assert.equal(modelSelect().options.find((o) => o.value === "vendor/model-3").label, "vendor/model-3 · $1 / $2 per 1M tokens");
+
+  host.ui.actions["set-modelFilter"]({ query: "llama 70b" });
+  assert.deepEqual(modelSelect().options.map((o) => o.value), ["", "meta-llama/llama-3.3-70b-instruct:free"]);
+  assert.equal(modelSelect().options[1].label, "meta-llama/llama-3.3-70b-instruct:free · free");
+  assert.equal(find().description, "Showing 1 of 26 models.");
+
+  host.ui.actions["set-modelFilter"]({ query: "" });
+  host.ui.actions["set-model"]({ value: "vendor/model-7" });
+  host.ui.actions["set-freeOnly"]({ value: true });
+  assert.equal(settingsView(host).find((n) => n.type === "toggle" && n.label === "Free models only").checked, true);
+  assert.deepEqual(modelSelect().options.map((o) => o.value), ["meta-llama/llama-3.3-70b-instruct:free", "vendor/model-7"], "the chosen model never vanishes");
+  assert.equal(find().description, "Showing 1 of 26 models.", "the kept choice isn't counted as a match");
+});
+
+test("a short list without prices gets no filter and no free switch", async () => {
+  const { host } = await activated({ models: ["qwen3:14b", "llama3.1:8b"] });
+  host.ui.actions.tab({ tabId: "settings" });
+  await flush();
+  assert.ok(!settingsView(host).some((n) => n.label === "Find a model" || n.label === "Free models only"));
+});
+
+test("OpenRouter without a saved key: the public list loads, but a chat says it needs a key instead of sending one without", async () => {
+  const { host } = await activated({ models: ["nvidia/nemotron-3.5-lightning:free"], modelReplies: [{ content: "Hi.", tool_calls: [] }] });
+  host.ui.actions.tab({ tabId: "settings" });
+  host.ui.actions["set-provider"]({ value: "openrouter" });
+  await flush();
+  host.ui.actions.tab({ tabId: "chat" });
+  host.ui.actions.tab({ tabId: "settings" }); // reopening Settings loads the (public) list
+  await flush();
+  host.ui.actions["set-model"]({ value: "nvidia/nemotron-3.5-lightning:free" });
+  assert.deepEqual(host.ui.headers.assistant.status, { variant: "warning", label: "Needs a key" }, "not Ready without a key");
+
+  host.ui.actions.send({ query: "hi" });
+  await flush();
+  assert.equal(host.modelRequests.length, 0, "no unauthenticated request");
+  host.ui.actions.tab({ tabId: "chat" });
+  assert.ok(viewTexts(host.ui.views.assistant).some((t) => /OpenRouter needs an API key/.test(t)));
+});
+
+test("a key typed but not saved is kept when a model is picked", async () => {
+  const { host } = await activated({ models: ["nvidia/nemotron-3.5-lightning:free"], modelReplies: [{ content: "Hi.", tool_calls: [] }] });
+  host.ui.actions.tab({ tabId: "settings" });
+  host.ui.actions["set-provider"]({ value: "openrouter" });
+  await flush();
+  host.ui.actions["set-apiKey"]({ value: " sk-or-typed " });
+  host.ui.actions["set-model"]({ value: "nvidia/nemotron-3.5-lightning:free" });
+  await flush();
+  assert.equal(host.storage.settings.keys.openrouter, "sk-or-typed");
+  assert.deepEqual(host.ui.headers.assistant.status, { variant: "success", label: "Ready" });
+  host.ui.actions.send({ query: "hi" });
+  await flush();
+  assert.equal(lastFetch(host, /\/chat\/completions/).args[1].headers.Authorization, "Bearer sk-or-typed");
+});
+
+test("a refused key says to check it", async () => {
+  const { host } = await activated({ modelReplies: [{ status: 401, body: { error: { message: "Missing Authentication header", code: 401 } } }] });
+  host.ui.actions.send({ query: "hello" });
+  await flush();
+  assert.ok(viewTexts(host.ui.views.assistant).some((t) => /didn't accept the API key.*Check the key/.test(t)));
+});
+
+test("Approve all runs the rest of the chat's changes without asking, until revoked or a new chat", async () => {
+  const invoked = [];
+  const { host } = await activated({
+    modelReplies: [
+      { content: "", tool_calls: [toolCall("play_tracks", { trackIds: [1] }, "a")] },
+      { content: "", tool_calls: [toolCall("play_tracks", { trackIds: [2] }, "b")] },
+      { content: "Done.", tool_calls: [] },
+      { content: "", tool_calls: [toolCall("play_tracks", { trackIds: [3] }, "c")] },
+    ],
+    invoke: async (name, args) => { invoked.push(args.trackIds[0]); return { ok: true }; },
+  });
+  const chatOf = () => host.ui.views.assistant.children.find((n) => n.type === "chat");
+  const headerActions = () => host.ui.headers.assistant.actions.map((a) => a.action);
+
+  host.ui.actions.send({ query: "play two things" });
+  await flush();
+  assert.equal(chatOf().approval.approveAllAction, "approve-all");
+  host.ui.actions["approve-all"]();
+  await flush();
+  assert.deepEqual(invoked, [1, 2], "the second change ran without a card");
+  assert.equal(chatOf().approval, null);
+  assert.match(chatOf().notice.message, /without asking/);
+  assert.deepEqual(headerActions(), ["new-chat", "ask-again"]);
+
+  host.ui.actions["ask-again"]();
+  assert.equal(chatOf().notice, null);
+  assert.deepEqual(headerActions(), ["new-chat"]);
+  host.ui.actions.send({ query: "one more" });
+  await flush();
+  assert.ok(chatOf().approval, "asks again once revoked");
+  assert.deepEqual(invoked, [1, 2]);
+});
+
+test("New chat ends Approve all, and works while an approval is waiting", async () => {
+  const invoked = [];
+  const { host } = await activated({
+    modelReplies: [
+      { content: "", tool_calls: [toolCall("play_tracks", { trackIds: [1] }, "a")] },
+      { content: "Done.", tool_calls: [] },
+      { content: "", tool_calls: [toolCall("play_tracks", { trackIds: [2] }, "b")] },
+    ],
+    invoke: async (name, args) => { invoked.push(args.trackIds[0]); return { ok: true }; },
+  });
+  const chatOf = () => host.ui.views.assistant.children.find((n) => n.type === "chat");
+  host.ui.actions.send({ query: "play" });
+  await flush();
+  host.ui.actions["approve-all"]();
+  await flush();
+  host.ui.actions["new-chat"]();
+  assert.deepEqual(chatOf().messages, []);
+  assert.equal(chatOf().notice, null, "Approve all belonged to the old chat");
+
+  host.ui.actions.send({ query: "play again" });
+  await flush();
+  assert.ok(chatOf().approval, "the new chat asks");
+  host.ui.actions["new-chat"](); // mid-turn, with the card up
+  await flush();
+  assert.equal(chatOf().approval, null);
+  assert.equal(chatOf().status, null, "not busy any more");
+  assert.deepEqual(chatOf().messages, []);
+  assert.deepEqual(invoked, [1], "the pending change never ran");
+});
+
 test("an out-of-credits answer says so", async () => {
   const { host } = await activated({ modelReplies: [{ status: 402, body: { error: { message: "Insufficient credits" } } }] });
   host.ui.actions.send({ query: "hello" });
