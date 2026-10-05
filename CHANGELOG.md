@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Claude: the API key hint says to give the key a workspace scope (e.g. Default workspace), not Organization.
+- Claude: an optional Workspace ID in Settings. An Anthropic key made outside a workspace was refused ("must include the anthropic-workspace-id header") — paste the workspace's ID and it's sent with every request.
+
 ## 0.2.0
 
 - The chat looks like a chat: your messages as bubbles on the right, answers as formatted text (headings, lists, tables, code, links) with a Copy button, and the composer pinned to the bottom (Enter sends, Shift+Enter adds a line).

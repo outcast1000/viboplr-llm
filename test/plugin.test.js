@@ -262,6 +262,36 @@ test("Claude: pick the provider, add a key, the models load and the chat sends a
   assert.equal(host.modelRequests[0].model, "claude-sonnet-5-5");
 });
 
+test("Claude: a workspace id rides on every request, for keys not scoped to a workspace", async () => {
+  const { host } = await activated({
+    models: ["claude-sonnet-5-5"],
+    modelReplies: [{ content: "Hi.", tool_calls: [] }],
+  });
+  host.ui.actions.tab({ tabId: "settings" });
+  host.ui.actions["set-provider"]({ value: "anthropic" });
+  await flush();
+  assert.ok(settingsView(host).some((n) => n.label === "Workspace ID"), "Claude offers a workspace field");
+
+  host.ui.actions["set-apiKey"]({ value: "sk-ant-x" });
+  host.ui.actions["set-workspaceId"]({ value: " wrkspc_01abc " });
+  host.ui.actions.connect();
+  await flush();
+  assert.equal(host.storage.settings.workspaces.anthropic, "wrkspc_01abc");
+  assert.equal(lastFetch(host, /\/models/).args[1].headers["anthropic-workspace-id"], "wrkspc_01abc");
+
+  host.ui.actions.send({ query: "hello" });
+  await flush();
+  assert.equal(lastFetch(host, /\/chat\/completions/).args[1].headers["anthropic-workspace-id"], "wrkspc_01abc");
+
+  host.ui.actions["set-provider"]({ value: "openai" });
+  await flush();
+  assert.ok(!settingsView(host).some((n) => n.label === "Workspace ID"), "only Claude has one");
+  host.ui.actions["set-apiKey"]({ value: "sk-openai" });
+  host.ui.actions.connect();
+  await flush();
+  assert.equal(lastFetch(host, /\/models/).args[1].headers["anthropic-workspace-id"], undefined, "never sent to another service");
+});
+
 test("each provider keeps its own key; OpenAI gets max_completion_tokens and only chat models", async () => {
   const { host } = await activated({
     models: ["gpt-5", "text-embedding-3-large", "whisper-1", "o4-mini", "dall-e-3"],

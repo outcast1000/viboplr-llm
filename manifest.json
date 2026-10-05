@@ -1,7 +1,7 @@
 {
   "id": "llm",
   "name": "AI Assistant",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Viboplr",
   "description": "An AI assistant inside Viboplr, running on your own model: a local one (Ollama, LM Studio, llama.cpp), Claude, OpenAI, Grok or any OpenAI-compatible service. Ask for music in plain words, fill albums, find upgrades, tidy messy titles and tags, and read about what's playing. It uses the same tools an outside AI assistant gets, and asks before changing anything.",
   "minAppVersion": "1.0.90",

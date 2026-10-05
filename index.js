@@ -85,6 +85,9 @@ var SYSTEM_PROMPT = [
  *    newer OpenAI models reject `max_tokens` in favour of `max_completion_tokens`.
  *  - anthropicAuth: Anthropic's model list ignores `Authorization: Bearer` and
  *    wants `x-api-key` + `anthropic-version` (its chat endpoint takes either).
+ *  - workspaceHeader: a key that isn't scoped to a workspace is refused (HTTP 400)
+ *    unless every request names one in this header, so the preset offers an
+ *    optional Workspace ID field.
  *  - chatModel: filters the model list down to models that can chat.
  */
 var PROVIDERS = [
@@ -92,8 +95,10 @@ var PROVIDERS = [
   { id: "lmstudio", label: "LM Studio (on this computer)", baseUrl: "http://127.0.0.1:1234/v1", local: true },
   {
     id: "anthropic", label: "Claude (Anthropic)", baseUrl: "https://api.anthropic.com/v1", needsKey: true,
-    keyHint: "From platform.claude.com → Settings → API keys (pay as you go). A Claude.ai subscription doesn't work here.",
-    maxTokensField: "max_tokens", anthropicAuth: true, modelsQuery: "?limit=100", keepOrder: true, modelExample: "claude-sonnet-5-5",
+    keyHint: "From platform.claude.com → Settings → API keys (pay as you go) — set its Scope to a workspace (e.g. Default workspace), not Organization. A Claude.ai subscription doesn't work here.",
+    maxTokensField: "max_tokens", anthropicAuth: true, workspaceHeader: "anthropic-workspace-id",
+    workspaceHint: "Only if Anthropic asks for one: a key made outside a workspace must name it. Copy the ID (wrkspc_…) from platform.claude.com → Settings → Workspaces — or make the key inside a workspace instead.",
+    modelsQuery: "?limit=100", keepOrder: true, modelExample: "claude-sonnet-5-5",
   },
   {
     id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", needsKey: true,
@@ -463,6 +468,7 @@ var settings = {
   provider: "", // a PROVIDERS id; "" = work it out from baseUrl (settings saved before presets)
   baseUrl: DEFAULT_BASE_URL,
   keys: {}, // API key per provider id, so switching provider doesn't lose (or misuse) a key
+  workspaces: {}, // workspace id per provider id, for presets with a workspaceHeader
   model: "",
   fastModel: "",
   maxSteps: DEFAULT_MAX_STEPS,
@@ -480,6 +486,7 @@ var ui = {
   status: null, // { variant, label }
   draftBaseUrl: null,
   draftApiKey: null,
+  draftWorkspace: null,
 };
 var conversation = []; // OpenAI messages, without the system prompt
 var conversationFeature = "chat";
@@ -504,16 +511,23 @@ function currentKey() {
   return (settings.keys && settings.keys[currentProvider().id]) || "";
 }
 
+function currentWorkspace() {
+  return (settings.workspaces && settings.workspaces[currentProvider().id]) || "";
+}
+
 function authHeaders() {
   var h = { "Content-Type": "application/json" };
+  var provider = currentProvider();
   var key = currentKey();
   if (key) {
     h.Authorization = "Bearer " + key;
-    if (currentProvider().anthropicAuth) {
+    if (provider.anthropicAuth) {
       h["x-api-key"] = key;
       h["anthropic-version"] = "2023-06-01";
     }
   }
+  var workspace = currentWorkspace();
+  if (provider.workspaceHeader && workspace) h[provider.workspaceHeader] = workspace;
   return h;
 }
 
@@ -822,6 +836,7 @@ function loadSettings() {
         if (saved[k] !== undefined && saved[k] !== null) settings[k] = saved[k];
       });
       if (!settings.keys || typeof settings.keys !== "object") settings.keys = {};
+      if (!settings.workspaces || typeof settings.workspaces !== "object") settings.workspaces = {};
       // 0.1.x kept one `apiKey`; it belongs to whichever service the endpoint was.
       if (typeof saved.apiKey === "string" && saved.apiKey) {
         var owner = providerForUrl(settings.baseUrl).id;
@@ -952,6 +967,14 @@ function settingsNodes() {
       control: { type: "text-input", password: true, placeholder: provider.needsKey ? "paste your key" : "none", action: "set-apiKey", value: ui.draftApiKey !== null ? ui.draftApiKey : currentKey() },
     });
   }
+  if (provider.workspaceHeader) {
+    nodes.push({
+      type: "settings-row",
+      label: "Workspace ID",
+      description: provider.workspaceHint,
+      control: { type: "text-input", placeholder: "optional", action: "set-workspaceId", value: ui.draftWorkspace !== null ? ui.draftWorkspace : currentWorkspace() },
+    });
+  }
   nodes.push({
     type: "layout",
     direction: "horizontal",
@@ -1010,7 +1033,7 @@ function render() {
 // api.ui.onAction is keyed by action id, so every id the view emits is listed.
 var VIEW_ACTIONS = [
   "tab", "tab:settings", "send", "quick", "approve", "deny", "stop", "new-chat",
-  "set-provider", "set-baseUrl", "set-apiKey", "connect", "set-model", "set-fastModel", "set-maxSteps",
+  "set-provider", "set-baseUrl", "set-apiKey", "set-workspaceId", "connect", "set-model", "set-fastModel", "set-maxSteps",
 ];
 
 function onViewAction(actionId, data) {
@@ -1050,6 +1073,7 @@ function onViewAction(actionId, data) {
       ui.modelsError = "";
       ui.draftBaseUrl = null;
       ui.draftApiKey = null;
+      ui.draftWorkspace = null;
       saveSettings();
       if (next.needsKey && !currentKey()) {
         ui.status = { variant: "warning", label: "Needs a key" };
@@ -1062,11 +1086,15 @@ function onViewAction(actionId, data) {
     ui.draftBaseUrl = String(d.value || "");
   } else if (actionId === "set-apiKey") {
     ui.draftApiKey = String(d.value || "");
+  } else if (actionId === "set-workspaceId") {
+    ui.draftWorkspace = String(d.value || "");
   } else if (actionId === "connect") {
     if (ui.draftBaseUrl !== null) settings.baseUrl = normalizeBaseUrl(ui.draftBaseUrl);
     if (ui.draftApiKey !== null) settings.keys[currentProvider().id] = ui.draftApiKey.trim();
+    if (ui.draftWorkspace !== null) settings.workspaces[currentProvider().id] = ui.draftWorkspace.trim();
     ui.draftBaseUrl = null;
     ui.draftApiKey = null;
+    ui.draftWorkspace = null;
     saveSettings().then(refreshModels);
   } else if (actionId === "set-model") {
     settings.model = String(d.value || "").trim();
