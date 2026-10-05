@@ -77,7 +77,8 @@ test("providerForUrl recognises presets, including settings saved before them", 
   assert.equal(plugin._providerForUrl("https://api.x.ai/v1").id, "xai");
   assert.equal(plugin._providerForUrl("http://localhost:11434/v1").id, "ollama");
   assert.equal(plugin._providerForUrl("http://127.0.0.1:1234/v1").id, "lmstudio");
-  assert.equal(plugin._providerForUrl("https://openrouter.ai/api/v1").id, "custom");
+  assert.equal(plugin._providerForUrl("https://openrouter.ai/api/v1").id, "openrouter", "settings saved under Other move to the preset");
+  assert.equal(plugin._providerForUrl("https://example.com/v1").id, "custom");
 });
 
 test("modelIds filters and orders per provider", () => {

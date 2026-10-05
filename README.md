@@ -2,7 +2,7 @@
 
 An AI assistant inside [Viboplr](https://github.com/outcast1000/viboplr), running on
 **your own model** — a local one (Ollama, LM Studio, llama.cpp server), Claude,
-OpenAI, Grok, or any other OpenAI-compatible service.
+OpenAI, Grok, OpenRouter, or any other OpenAI-compatible service.
 
 - **Chat** — "play something mellow for a rainy Sunday, nothing I played this week",
   "which songs did I like but forget?", "tidy up my genre tags".
@@ -40,6 +40,7 @@ Open **AI Assistant → Settings** and pick a **Provider**:
 | Claude (Anthropic) | An API key from platform.claude.com → Settings → API keys (pay as you go). A Claude.ai Pro/Max subscription doesn't work here. |
 | OpenAI | An API key from platform.openai.com. |
 | Grok (xAI) | An API key from console.x.ai. |
+| OpenRouter | An API key from openrouter.ai → Keys. One key reaches hundreds of models from every vendor; only ones that can call tools are listed, and you choose the model yourself. |
 | Other | Any OpenAI-compatible endpoint with tool calling, and its key if it needs one. |
 
 Paste the key, press **Save and connect**, and pick a model. If the service
@@ -48,7 +49,7 @@ switching back and forth doesn't lose one. Hosted services bill you per use; eve
 turn sends the tool descriptions, so a long agentic answer costs more than a chat
 reply.
 
-Claude, OpenAI and Grok are reached through their OpenAI-compatible endpoints.
+Claude, OpenAI, Grok and OpenRouter are reached through their OpenAI-compatible endpoints.
 For Claude that endpoint ignores "answer in JSON" (the Meaning tab copes) and has
 no prompt caching.
 

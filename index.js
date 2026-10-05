@@ -89,6 +89,13 @@ var SYSTEM_PROMPT = [
  *    unless every request names one in this header, so the preset offers an
  *    optional Workspace ID field.
  *  - chatModel: filters the model list down to models that can chat.
+ *  - modelsQuery: appended to /models. OpenRouter's `supported_parameters=tools`
+ *    keeps only models that can call tools, out of several hundred. (Its router
+ *    already sends a `tools` request only to backends that support tools.)
+ *  - extraHeaders: sent with every request (OpenRouter's optional app
+ *    attribution, so the user's activity page names Viboplr).
+ *  - noAutoPick: don't default to the first listed model. On an aggregator that
+ *    is an arbitrary, possibly paid model the user never chose.
  */
 var PROVIDERS = [
   { id: "ollama", label: "Ollama (on this computer)", baseUrl: "http://127.0.0.1:11434/v1", local: true },
@@ -109,6 +116,15 @@ var PROVIDERS = [
     },
   },
   { id: "xai", label: "Grok (xAI)", baseUrl: "https://api.x.ai/v1", needsKey: true, keyHint: "From console.x.ai → API keys." },
+  {
+    id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", needsKey: true,
+    keyHint: "From openrouter.ai → Keys. One key reaches models from every vendor; you pay OpenRouter per use.",
+    maxTokensField: "max_tokens", modelsQuery: "?supported_parameters=tools", noAutoPick: true,
+    extraHeaders: { "HTTP-Referer": "https://viboplr.com", "X-OpenRouter-Title": "Viboplr" },
+    modelExample: "anthropic/claude-sonnet-5.5",
+    // `:batch` ids are half-price batch routes for jobs that can wait, not a chat.
+    chatModel: function (id) { return !/:batch$/i.test(id); },
+  },
   { id: "custom", label: "Other (OpenAI-compatible)", baseUrl: null },
 ];
 var MAX_REPLY_TOKENS = 8192;
@@ -528,6 +544,9 @@ function authHeaders() {
   }
   var workspace = currentWorkspace();
   if (provider.workspaceHeader && workspace) h[provider.workspaceHeader] = workspace;
+  if (provider.extraHeaders) {
+    Object.keys(provider.extraHeaders).forEach(function (k) { h[k] = provider.extraHeaders[k]; });
+  }
   return h;
 }
 
@@ -541,6 +560,7 @@ function readJson(res) {
     }
     if (res.status < 200 || res.status >= 300) {
       var detail = json && json.error ? (json.error.message || JSON.stringify(json.error)) : truncate(text, 300);
+      if (res.status === 402) throw new Error("The model service says the account is out of credits (HTTP 402)" + (detail ? ": " + detail : "") + ". Add credits there, or pick a free model.");
       throw new Error("The model endpoint answered HTTP " + res.status + (detail ? ": " + detail : ""));
     }
     if (json === null) throw new Error("The model endpoint didn't answer with JSON");
@@ -859,7 +879,7 @@ function refreshModels() {
   return listModels().then(
     function (models) {
       ui.models = models;
-      if (!settings.model && models.length) {
+      if (!settings.model && models.length && !currentProvider().noAutoPick) {
         settings.model = models[0];
         saveSettings();
       }
@@ -936,7 +956,8 @@ function chatNode() {
 function settingsNodes() {
   var modelOptions = ui.models.map(function (m) { return { value: m, label: m }; });
   if (settings.model && ui.models.indexOf(settings.model) === -1) modelOptions.unshift({ value: settings.model, label: settings.model });
-  var fastOptions = [{ value: "", label: "Same as the main model" }].concat(modelOptions.filter(function (o) { return o.value !== settings.model; }));
+  if (!settings.model && modelOptions.length) modelOptions.unshift({ value: "", label: "Choose a model…" });
+  var fastOptions = [{ value: "", label: "Same as the main model" }].concat(modelOptions.filter(function (o) { return o.value && o.value !== settings.model; }));
   var provider = currentProvider();
   var nodes = [
     {

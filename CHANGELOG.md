@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- OpenRouter is a provider: pick it in Settings, paste a key from openrouter.ai, and choose from the models that can call tools (the assistant needs them; the rest of OpenRouter's several hundred aren't listed, nor its slow half-price `:batch` routes). It doesn't pick a model for you — on OpenRouter the first one listed is arbitrary and may be paid. Settings saved under "Other" with OpenRouter's address move to the preset by themselves.
+- Requests to OpenRouter name Viboplr, so your OpenRouter activity page shows where the usage came from.
+- An "out of credits" answer (HTTP 402) from any service now says so plainly, instead of a bare HTTP error.
+- The model list starts with "Choose a model…" while none is chosen, instead of looking like its first entry was picked.
+
 ## 0.2.1
 
 - Claude: the API key hint says to give the key a workspace scope (e.g. Default workspace), not Organization.

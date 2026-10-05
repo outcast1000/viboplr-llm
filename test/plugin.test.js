@@ -319,6 +319,53 @@ test("each provider keeps its own key; OpenAI gets max_completion_tokens and onl
   assert.equal(settingsView(host).find((n) => n.label === "API key").control.value, "sk-openai");
 });
 
+test("OpenRouter: only tool-capable models, no auto-picked model, attribution headers and a reply cap", async () => {
+  const { host } = await activated({
+    models: ["openai/gpt-5", "anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4.5:batch"],
+    modelReplies: [{ content: "Hi.", tool_calls: [] }],
+  });
+  host.ui.actions.tab({ tabId: "settings" });
+  host.ui.actions["set-provider"]({ value: "openrouter" });
+  await flush();
+  assert.equal(host.storage.settings.baseUrl, "https://openrouter.ai/api/v1");
+  assert.deepEqual(host.ui.headers.assistant.status, { variant: "warning", label: "Needs a key" });
+
+  host.ui.actions["set-apiKey"]({ value: "sk-or-x" });
+  host.ui.actions.connect();
+  await flush();
+  const list = lastFetch(host, /\/models/);
+  assert.equal(list.args[0], "https://openrouter.ai/api/v1/models?supported_parameters=tools");
+  assert.equal(list.args[1].headers.Authorization, "Bearer sk-or-x");
+  assert.equal(host.storage.settings.model, "", "an aggregator's first model is arbitrary; the user picks");
+  assert.deepEqual(host.ui.headers.assistant.status, { variant: "warning", label: "No model" });
+  const model = settingsView(host).find((n) => n.type === "select" && n.label === "Model");
+  assert.deepEqual(model.options.map((o) => o.value), ["", "anthropic/claude-sonnet-4.5", "openai/gpt-5"]);
+  const fast = settingsView(host).find((n) => n.type === "select" && n.label === "Fast model");
+  assert.equal(fast.options.filter((o) => o.value === "").length, 1, "one empty choice, not two");
+
+  host.ui.actions["set-model"]({ value: "anthropic/claude-sonnet-4.5" });
+  host.ui.actions.send({ query: "hello" });
+  await flush();
+  const chat = lastFetch(host, /\/chat\/completions/);
+  assert.equal(chat.args[1].headers["X-OpenRouter-Title"], "Viboplr");
+  assert.equal(chat.args[1].headers["HTTP-Referer"], "https://viboplr.com");
+  assert.equal(host.modelRequests[0].max_tokens, 8192);
+  assert.equal(host.modelRequests[0].model, "anthropic/claude-sonnet-4.5");
+
+  host.ui.actions["set-provider"]({ value: "xai" });
+  host.ui.actions["set-apiKey"]({ value: "xai-key" });
+  host.ui.actions.connect();
+  await flush();
+  assert.equal(lastFetch(host, /\/models/).args[1].headers["X-OpenRouter-Title"], undefined, "never sent to another service");
+});
+
+test("an out-of-credits answer says so", async () => {
+  const { host } = await activated({ modelReplies: [{ status: 402, body: { error: { message: "Insufficient credits" } } }] });
+  host.ui.actions.send({ query: "hello" });
+  await flush();
+  assert.ok(viewTexts(host.ui.views.assistant).some((t) => /out of credits.*Insufficient credits/.test(t)), "credit error shown");
+});
+
 test("when the model list fails, the model can be typed", async () => {
   const { host } = await activated({ modelsStatus: 401, modelReplies: [{ content: "Hi.", tool_calls: [] }] });
   host.ui.actions.tab({ tabId: "settings" });
