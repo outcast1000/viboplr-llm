@@ -34,6 +34,45 @@ test("activate renders the chat, registers its surfaces and checks the endpoint"
   assert.deepEqual(host.ui.headers.assistant.status, { variant: "success", label: "Ready" });
 });
 
+test("Stop ends the turn at once, even while the model call is still running", async () => {
+  let open;
+  const gate = new Promise((r) => { open = r; });
+  const { host } = await activated({
+    modelReplies: [
+      { gate, reply: { content: "", tool_calls: [toolCall("play_tracks", { trackIds: [3] }, "a")] } },
+      { content: "Second answer.", tool_calls: [] },
+    ],
+    invoke: async () => ({ ok: true }),
+  });
+  const chatOf = () => host.ui.views.assistant.children.find((n) => n.type === "chat");
+
+  host.ui.actions.send({ query: "play something" });
+  await flush();
+  assert.ok(chatOf().status, "working");
+
+  const modelCall = host.calls.find((c) => c.name === "network.fetch" && /\/chat\/completions$/.test(c.args[0]));
+  assert.ok(modelCall.args[1].signal, "the model request carries a signal");
+  assert.equal(modelCall.args[1].signal.aborted, false);
+
+  host.ui.actions.stop();
+  await flush();
+  assert.equal(modelCall.args[1].signal.aborted, true, "Stop aborts the request, so the host drops the connection");
+  assert.equal(chatOf().status, null, "idle immediately — not after the model answers");
+  assert.equal(chatOf().messages.at(-1).text, "Stopped.");
+
+  // The hung call finally lands: its tool call must not run, its answer must not show.
+  open();
+  await flush();
+  assert.deepEqual(host.hostToolCalls, [], "the stopped turn ran nothing");
+  assert.equal(chatOf().approval, null);
+
+  // And the next message is a normal turn.
+  host.ui.actions.send({ query: "again" });
+  await flush();
+  assert.equal(chatOf().messages.at(-1).text, "Second answer.");
+  assert.equal(chatOf().status, null);
+});
+
 test("on an old host the chat says to update, and Ask isn't offered", async () => {
   const { host } = await activated({ noHost: true });
   assert.deepEqual(host.search.providers, []);
@@ -60,6 +99,14 @@ test("a chat turn: read-only tool runs, the write waits for Approve, the answer 
   assert.deepEqual(host.hostToolCalls.map((c) => c.name), ["search_library", "play_tracks"]);
   assert.ok(viewTexts(host.ui.views.assistant).includes("Playing it now."));
   assert.equal(host.ui.badges.assistant, null);
+
+  // One user message, one assistant turn — the tool calls ride inside the turn
+  // as folded steps, not as rows of their own.
+  const chat = host.ui.views.assistant.children.find((n) => n.type === "chat");
+  assert.deepEqual(chat.messages.map((m) => m.role), ["user", "assistant"]);
+  assert.deepEqual(chat.messages[1].steps.map((s) => s.status), ["ok", "ok"]);
+  assert.equal(chat.messages[1].text, "Playing it now.");
+  assert.equal(chat.status, null, "idle once the answer landed");
 
   // The model got a system prompt built from ours + the app's notes, and only
   // the chat feature's tools (all three here) plus web_fetch.

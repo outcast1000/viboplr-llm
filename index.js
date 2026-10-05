@@ -382,11 +382,12 @@ var settings = {
 };
 var ui = {
   tab: "chat",
-  transcript: [], // { role: "user"|"assistant"|"tool"|"error"|"note", text }
+  // The host chat node's messages: { id, role: "user"|"assistant"|"error"|"note",
+  // text, steps? } — an assistant turn carries its tool calls as folded steps.
+  transcript: [],
   busy: false,
   busySince: 0,
   pending: null, // { name, args, resolve }
-  cancelled: false,
   models: [],
   modelsError: "",
   status: null, // { variant, label }
@@ -395,7 +396,10 @@ var ui = {
 };
 var conversation = []; // OpenAI messages, without the system prompt
 var conversationFeature = "chat";
-var tickTimer = null;
+var nextMessageId = 1;
+var turnGen = 0; // bumped by every new turn and by Stop; a turn whose gen is behind is stale
+var activeTurn = null; // the assistant message of the running turn
+var turnAbort = null; // AbortController for the running turn's model requests
 var unsubs = [];
 
 function hostTools() {
@@ -429,6 +433,7 @@ function readJson(res) {
 }
 
 function connectionError(e) {
+  if (e && e.name === "AbortError") return e; // we cancelled it; not a connection problem
   var msg = errorText(e);
   if (/HTTP \d+/.test(msg)) return new Error(msg);
   return new Error("Can't reach the model at " + hostOf(settings.baseUrl) + " (" + msg + "). Is it running?");
@@ -449,6 +454,10 @@ function chat(messages, toolsSpec, opts) {
         headers: authHeaders(),
         body: JSON.stringify(body),
         timeoutMs: CHAT_TIMEOUT_MS,
+        // Stop aborts it: the host drops the connection, so the model server
+        // stops generating. Hosts before 1.0.90 ignore it (Stop then only
+        // discards the late reply — see stopTurn).
+        signal: o.signal,
       });
     })
     .catch(function (e) { throw connectionError(e); })
@@ -530,14 +539,42 @@ function pushTranscript(entry) {
   if (ui.transcript.length > MAX_TRANSCRIPT) ui.transcript.splice(0, ui.transcript.length - MAX_TRANSCRIPT);
 }
 
+function message(role, text) {
+  return { id: "m" + nextMessageId++, role: role, text: text };
+}
+
+// The host draws the elapsed counter from busySince, so no per-second re-render.
 function setBusy(on) {
   ui.busy = on;
   ui.busySince = on ? Date.now() : 0;
-  if (on && !tickTimer) {
-    tickTimer = setInterval(render, 1000);
-  } else if (!on && tickTimer) {
-    clearInterval(tickTimer);
-    tickTimer = null;
+}
+
+/** A turn's agent events → its folded step list. */
+function recordStep(turn, ev) {
+  if (ev.type === "tool-start") {
+    turn.steps.push({ label: describeCall(ev.name, ev.args), status: "running", name: ev.name });
+  } else if (ev.type === "tool") {
+    var running = null;
+    for (var i = turn.steps.length - 1; i >= 0; i--) {
+      if (turn.steps[i].status === "running" && turn.steps[i].name === ev.name) {
+        running = turn.steps[i];
+        break;
+      }
+    }
+    if (running) {
+      running.status = ev.ok ? "ok" : "error";
+      if (!ev.ok && ev.error) running.detail = truncate(ev.error, 300);
+    } else {
+      // Declined, or refused before it ran (an unknown tool): no start event came first.
+      turn.steps.push({
+        label: describeCall(ev.name, ev.args),
+        status: ev.declined ? "declined" : "error",
+        name: ev.name,
+        detail: ev.declined ? "You declined this." : ev.error ? truncate(ev.error, 300) : undefined,
+      });
+    }
+  } else if (ev.type === "thinking") {
+    turn.steps.push({ label: ev.text, status: "note" });
   }
 }
 
@@ -552,7 +589,6 @@ function settlePending(approved) {
   var p = ui.pending;
   if (!p) return;
   ui.pending = null;
-  pushTranscript({ role: "tool", text: (approved ? "Approved: " : "Declined: ") + describeCall(p.name, p.args) });
   p.resolve(approved);
   render();
 }
@@ -566,9 +602,18 @@ function sendMessage(text, featureId) {
   }
   if (featureId) conversationFeature = featureId;
   var feature = FEATURES[conversationFeature] || FEATURES.chat;
-  pushTranscript({ role: "user", text: msg });
+  pushTranscript(message("user", msg));
+  var turn = message("assistant", "");
+  turn.steps = [];
+  pushTranscript(turn);
   conversation.push({ role: "user", content: msg });
-  ui.cancelled = false;
+  var gen = ++turnGen;
+  activeTurn = turn;
+  turnAbort = typeof AbortController === "function" ? new AbortController() : null;
+  var signal = turnAbort ? turnAbort.signal : undefined;
+  // Per turn, not a shared flag: the next message must not revive a stopped
+  // turn whose model request is still finishing in the background.
+  var stale = function () { return gen !== turnGen; };
   setBusy(true);
   render();
 
@@ -576,36 +621,69 @@ function sendMessage(text, featureId) {
     .then(function (both) {
       var tools = selectTools(both[0], feature);
       return runAgent({
-        chat: chat,
+        chat: function (msgs, spec) { return chat(msgs, spec, { signal: signal }); },
         tools: tools,
         invoke: invokeTool,
         confirm: confirmCall,
-        isCancelled: function () { return ui.cancelled; },
+        isCancelled: stale,
         maxSteps: settings.maxSteps,
         messages: [{ role: "system", content: both[1] }].concat(conversation),
         onEvent: function (ev) {
-          if (ev.type === "tool-start") pushTranscript({ role: "tool", text: "→ " + describeCall(ev.name, ev.args) });
-          else if (ev.type === "tool" && !ev.ok && !ev.declined) pushTranscript({ role: "tool", text: "✗ " + ev.name + ": " + truncate(ev.error, 300) });
-          else if (ev.type === "thinking") pushTranscript({ role: "note", text: ev.text });
+          if (stale()) return;
+          recordStep(turn, ev);
           render();
         },
       });
     })
     .then(function (out) {
+      if (stale()) return; // stopped: stopTurn already closed it
       conversation = out.messages.slice(1); // drop the system prompt; it is rebuilt each turn
-      if (out.stopped === "cancelled") pushTranscript({ role: "note", text: "Stopped." });
-      else pushTranscript({ role: "assistant", text: out.text || "(no answer)" });
+      turn.text = out.text || "(no answer)";
     })
     .catch(function (e) {
-      if (!api) return; // deactivated mid-turn: nothing left to report to
+      if (!api || stale()) return; // deactivated or stopped mid-turn: nothing left to report to
       api.log("error", "Assistant turn failed: " + errorText(e));
-      pushTranscript({ role: "error", text: errorText(e) });
+      pushTranscript(message("error", errorText(e)));
     })
     .then(function () {
-      if (ui.pending) settlePending(false);
-      setBusy(false);
-      render();
+      if (stale()) return;
+      endTurn(turn);
     });
+}
+
+function endTurn(turn) {
+  if (ui.pending) settlePending(false);
+  // A turn that ends with neither words nor steps would be an empty row.
+  if (!turn.text && !turn.steps.length) {
+    var at = ui.transcript.indexOf(turn);
+    if (at !== -1) ui.transcript.splice(at, 1);
+  }
+  activeTurn = null;
+  turnAbort = null;
+  setBusy(false);
+  render();
+}
+
+/**
+ * Stop at once. Aborting the turn's signal makes the host drop the model
+ * request, so the server stops generating. Either way the turn is stale from
+ * here: a reply that still lands (an older host ignores the signal) is dropped
+ * and nothing after it runs.
+ */
+function stopTurn() {
+  if (!ui.busy || !activeTurn) return;
+  var turn = activeTurn;
+  if (turnAbort) turnAbort.abort();
+  turnGen++;
+  turn.steps.forEach(function (st) {
+    if (st.status === "running") {
+      st.status = "error";
+      st.detail = "Stopped before it finished.";
+    }
+  });
+  endTurn(turn);
+  pushTranscript(message("note", "Stopped."));
+  render();
 }
 
 function newChat() {
@@ -671,63 +749,48 @@ function banner(message, buttonLabel, action) {
   return { type: "layout", direction: "horizontal", className: "ds-banner ds-banner--warning", children: children };
 }
 
-function chatNodes() {
-  var nodes = [];
+/** The chat view: one host `chat` node (app 1.0.90+). */
+function chatNode() {
+  var notice = null;
   if (!hostTools()) {
-    nodes.push(banner("This version of Viboplr can't lend its tools to plugins. Update the app to use the assistant."));
-    return nodes;
+    notice = { message: "This version of Viboplr can't lend its tools to plugins. Update the app to use the assistant." };
+  } else if (!settings.model) {
+    notice = { message: "No model chosen yet.", actionLabel: "Open Settings", action: "tab:settings" };
   }
-  if (!settings.model) {
-    nodes.push(banner("No model chosen yet.", "Open Settings", "tab:settings"));
-  }
-  if (!ui.transcript.length) {
-    nodes.push(text("Ask for music in plain words, or start with one of these. Nothing changes until you approve it."));
-    nodes.push({
-      type: "layout",
-      direction: "horizontal",
-      children: QUICK_PROMPTS.map(function (q) {
-        return { type: "button", label: q.label, action: "quick", data: { id: q.id }, variant: "secondary", disabled: ui.busy };
-      }),
-    });
-  }
-  ui.transcript.forEach(function (e) {
-    var prefix = e.role === "user" ? "You: " : "";
-    var cls = e.role === "tool" || e.role === "note" ? "plugin-muted" : e.role === "error" ? "plugin-error" : e.role === "user" ? "plugin-heading" : undefined;
-    nodes.push(text(prefix + e.text, cls));
-  });
-  if (ui.pending) {
-    nodes.push({
-      type: "section",
-      title: "Approve this action?",
-      children: [
-        text(describeCall(ui.pending.name, ui.pending.args)),
-        {
-          type: "layout",
-          direction: "horizontal",
-          children: [
-            { type: "button", label: "Approve", action: "approve", variant: "accent" },
-            { type: "button", label: "Deny", action: "deny", variant: "secondary" },
-          ],
-        },
-      ],
-    });
-  } else if (ui.busy) {
-    var secs = Math.max(0, Math.round((Date.now() - ui.busySince) / 1000));
-    nodes.push({
-      type: "layout",
-      direction: "horizontal",
-      children: [{ type: "loading", message: "Thinking… " + secs + "s" }, { type: "button", label: "Stop", action: "stop", variant: "secondary" }],
-    });
-  }
-  nodes.push({
-    type: "layout",
-    direction: "horizontal",
-    children: [
-      { type: "search-input", placeholder: "Ask anything about your music…", action: "send", submitOnly: true, buttonLabel: "Send" },
-      { type: "button", label: "New chat", action: "new-chat", variant: "secondary", disabled: ui.busy || !ui.transcript.length },
-    ],
-  });
-  return nodes;
+  var last = ui.transcript[ui.transcript.length - 1];
+  var working = !!(last && last.steps && last.steps.some(function (st) { return st.status === "running"; }));
+  return {
+    type: "chat",
+    messages: ui.transcript.map(function (e) {
+      var m = { id: e.id, role: e.role, text: e.text };
+      if (e.steps && e.steps.length) {
+        m.steps = e.steps.map(function (st) {
+          return st.detail ? { label: st.label, status: st.status, detail: st.detail } : { label: st.label, status: st.status };
+        });
+      }
+      return m;
+    }),
+    empty: {
+      title: "What are we listening to?",
+      subtitle: "Ask for music in plain words, or start with one of these. Nothing changes until you approve it.",
+      suggestions: QUICK_PROMPTS.map(function (q) { return { label: q.label, action: "quick", data: { id: q.id } }; }),
+    },
+    notice: notice,
+    status: ui.busy && !ui.pending ? { label: working ? "Working…" : "Thinking…", since: ui.busySince } : null,
+    approval: ui.pending
+      ? { title: "Approve this action?", message: describeCall(ui.pending.name, ui.pending.args), approveAction: "approve", denyAction: "deny" }
+      : null,
+    composer: {
+      action: "send",
+      placeholder: "Ask anything about your music…",
+      disabled: !hostTools(),
+      stopAction: "stop",
+      newAction: "new-chat",
+      newLabel: "New chat",
+      footer: settings.model || "Choose a model",
+      footerAction: "tab:settings",
+    },
+  };
 }
 
 function settingsNodes() {
@@ -773,7 +836,7 @@ function settingsNodes() {
 function render() {
   if (!api) return;
   var tabs = { type: "tabs", tabs: [{ id: "chat", label: "Chat" }, { id: "settings", label: "Settings" }], activeTab: ui.tab, action: "tab" };
-  var body = ui.tab === "settings" ? settingsNodes() : chatNodes();
+  var body = ui.tab === "settings" ? settingsNodes() : [chatNode()];
   api.ui.setViewData(VIEW_ID, { type: "layout", direction: "vertical", children: [tabs].concat(body) });
   if (typeof api.ui.setViewHeader === "function") {
     api.ui.setViewHeader(VIEW_ID, {
@@ -814,9 +877,7 @@ function onViewAction(actionId, data) {
   } else if (actionId === "deny") {
     settlePending(false);
   } else if (actionId === "stop") {
-    ui.cancelled = true;
-    if (ui.pending) settlePending(false);
-    render();
+    stopTurn();
   } else if (actionId === "new-chat") {
     newChat();
   } else if (actionId === "set-baseUrl") {
@@ -930,7 +991,7 @@ function onMenuAction(actionId, target) {
   ui.tab = "chat";
   api.ui.navigateToView(VIEW_ID);
   if (ui.busy) {
-    pushTranscript({ role: "note", text: "Finish or stop the current answer first." });
+    pushTranscript(message("note", "Finish or stop the current answer first."));
     render();
     return;
   }
@@ -967,11 +1028,11 @@ function activate(pluginApi) {
 }
 
 function deactivate() {
-  if (tickTimer) clearInterval(tickTimer);
-  tickTimer = null;
   if (ui.pending) ui.pending.resolve(false);
   ui.pending = null;
-  ui.cancelled = true;
+  if (turnAbort) turnAbort.abort();
+  turnAbort = null;
+  turnGen++; // any turn still running is stale now
   unsubs.forEach(function (u) {
     try {
       u();

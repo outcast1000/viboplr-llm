@@ -29,6 +29,22 @@ function makeHost(opts = {}) {
         const next = modelReplies.shift();
         if (!next) return response(200, { choices: [{ message: { content: "(no scripted reply)" } }] });
         if (next.status) return response(next.status, next.body);
+        // { gate, reply }: a model call that hangs until the test opens the gate.
+        if (next.gate) {
+          // Honour the signal as the host does: abort rejects with AbortError.
+          const signal = init.signal;
+          await new Promise((resolve, reject) => {
+            next.gate.then(resolve);
+            if (signal) {
+              signal.addEventListener("abort", () => {
+                const e = new Error("The request was cancelled.");
+                e.name = "AbortError";
+                reject(e);
+              });
+            }
+          });
+          return response(200, { choices: [{ message: next.reply }] });
+        }
         return response(200, { choices: [{ message: next }] });
       }
       return response(404, { error: "no route" });
@@ -113,6 +129,15 @@ function viewTexts(node, out = []) {
   if (!node || typeof node !== "object") return out;
   if (node.type === "text") out.push(node.content);
   if (node.type === "loading" && node.message) out.push(node.message);
+  if (node.type === "chat") {
+    if (node.notice) out.push(node.notice.message);
+    node.messages.forEach((m) => {
+      if (m.text) out.push(m.text);
+      (m.steps || []).forEach((s) => out.push(s.label));
+    });
+    if (node.approval) out.push(node.approval.message);
+    if (node.status) out.push(node.status.label);
+  }
   for (const k of ["children"]) if (Array.isArray(node[k])) node[k].forEach((c) => viewTexts(c, out));
   if (node.control) viewTexts(node.control, out);
   return out;
