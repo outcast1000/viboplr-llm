@@ -52,8 +52,11 @@ var WEB_FETCH_TOOL = {
 };
 
 // What each entry point gives the model. `null` = every category.
+// Chat is open-ended, so it gets everything: a category list here once left out
+// "app" (manage_extensions, app_version, navigate…), so the model read the
+// shared instructions' install recipe but had no tool to follow it with.
 var FEATURES = {
-  chat: { categories: ["library", "playback", "queue", "playlists", "likes", "tags", "info", "catalog", "download", "files", "plugins", "web"] },
+  chat: { categories: null },
   ask: { categories: ["library"], readOnlyOnly: true },
   about: { categories: ["library", "info", "playback", "queue", "web"] },
   fill: { categories: ["library", "info", "catalog", "download", "plugins"] },

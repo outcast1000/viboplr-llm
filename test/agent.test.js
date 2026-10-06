@@ -177,6 +177,13 @@ test("features pick tools by category; Ask gets read-only library tools only", (
   assert.ok(!cleanup.includes("play_tracks"));
 });
 
+test("chat gets every tool, whatever its category", () => {
+  const appTool = { name: "manage_extensions", description: "", inputSchema: {}, readOnly: false, categories: ["app"] };
+  const all = TOOLS.concat([plugin._WEB_FETCH_TOOL, appTool]);
+  const chat = plugin._selectTools(all, plugin._FEATURES.chat).map((t) => t.name);
+  assert.deepEqual(chat, all.map((t) => t.name));
+});
+
 test("a tool the app adds later joins every feature that shares its category", () => {
   const newTool = { name: "find_similar", description: "", inputSchema: {}, readOnly: true, categories: ["library"] };
   for (const f of ["ask", "about", "fill", "upgrade", "cleanup", "tags", "chat"]) {
