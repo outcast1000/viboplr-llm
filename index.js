@@ -227,7 +227,7 @@ function parseChatResponse(json) {
     var fn = c.function || {};
     return { id: c.id || "call_" + i, name: fn.name || "", args: parseArgs(fn.arguments) };
   });
-  return { content: typeof msg.content === "string" ? msg.content : "", toolCalls: calls };
+  return { content: typeof msg.content === "string" ? msg.content : "", toolCalls: calls, finishReason: choice.finish_reason || "" };
 }
 
 /** The first JSON object in a model answer (models like to wrap it in ```json). */
@@ -367,10 +367,17 @@ function runAgent(opts) {
       }
       if (resp.content) onEvent({ type: "thinking", text: resp.content });
       // Calls run in order: a later call may depend on an earlier one's effect.
+      // A reply that hit the length cap may carry tool arguments cut off mid-way
+      // (a gateway can repair the JSON by dropping the unfinished field), so the
+      // calls are not run: the model is told to send something smaller.
+      var truncated = resp.finishReason === "length";
       return calls.reduce(function (p, call) {
         return p.then(function () {
           if (cancelled()) return;
-          return runCall(call).then(function (result) {
+          var run = truncated
+            ? Promise.resolve({ error: "Your reply was cut off at the length limit (" + MAX_REPLY_TOKENS + " tokens), so this call's arguments are incomplete and it was not run. Send a much smaller version: fewer items, shorter text." })
+            : runCall(call);
+          return run.then(function (result) {
             messages.push({
               role: "tool",
               tool_call_id: call.id,

@@ -222,3 +222,13 @@ test("rowToPluginTrack is metadata-only (the library resolver finds the file)", 
   const t = plugin._rowToPluginTrack({ id: 4, title: "Jóga", artist_name: "Björk", album_title: "Homogenic", duration_secs: 305, path: "a/b.flac" });
   assert.deepEqual(t, { title: "Jóga", artist_name: "Björk", album_title: "Homogenic", duration_secs: 305 });
 });
+
+test("tool calls from a reply cut off at the length limit are not run, the model is told to shrink", async () => {
+  const model = scripted([
+    { content: "", toolCalls: [call("search_library", { query: "x" })], finishReason: "length" },
+    { content: "ok, smaller", toolCalls: [] },
+  ]);
+  await plugin._runAgent({ chat: model.chat, tools: TOOLS, invoke: () => assert.fail("must not invoke"), confirm: () => assert.fail("must not ask"), messages: [] });
+  const toolMsg = model.seen[1].messages.find((m) => m.role === "tool");
+  assert.match(toolMsg.content, /cut off/);
+});
