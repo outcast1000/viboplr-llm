@@ -1,5 +1,9 @@
 # Changelog
 
+
+## v0.3.2
+- Releases are now signed with the Viboplr plugin-signing key, so Viboplr allows the permissions this plugin asks for without prompting. Also includes: no tool calls from a reply cut off at the length limit; chat gets every host tool.
+
 ## 0.3.1
 
 - Find a model: a long model list (OpenRouter's has hundreds) gets a filter box above it. Type any words, in any order ("llama 70b", "claude sonnet"), and the Model and Fast model lists narrow to the matches, with a "Showing N of M" count.
