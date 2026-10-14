@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.4
+- Requests to the model service now identify themselves as `Vibo` instead of using the app's browser-style default, which some company networks (Zscaler) block from a non-browser client. Web pages fetched for the assistant keep the default.
+
 ## v0.3.3
 - Each permission now says why the plugin needs it, shown under it when Viboplr asks. No functional changes.
 

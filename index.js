@@ -557,7 +557,9 @@ function readyStatus() {
 }
 
 function authHeaders() {
-  var h = { "Content-Type": "application/json" };
+  // Name ourselves: the host's default User-Agent is browser-style, which some
+  // filtering proxies block from a non-browser client.
+  var h = { "Content-Type": "application/json", "User-Agent": "Vibo" };
   var provider = currentProvider();
   var key = currentKey();
   if (key) {
