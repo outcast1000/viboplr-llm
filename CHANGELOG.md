@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.3.5
+- Web search: on a Viboplr with the shared web search service, the chat and "Ask AI about this…" get the app's `web_search` tool (it arrives through the host catalog, nothing to configure) and are told to search first, then read the page with `web_fetch`. With no web search plugin installed, the chat offers to add one from the gallery (you approve the install in the app). Older apps are unaffected.
+
 ## v0.3.4
 - Requests to the model service now identify themselves as `Vibo` instead of using the app's browser-style default, which some company networks (Zscaler) block from a non-browser client. Web pages fetched for the assistant keep the default.
 
