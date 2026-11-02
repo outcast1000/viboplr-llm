@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.6
+- A model the service is rate-limiting (HTTP 429), common with OpenRouter's free models, now says so and suggests waiting or picking another model. The error shows the provider's actual reason (e.g. "temporarily rate-limited upstream") instead of OpenRouter's generic "Provider returned error".
+
+
 ## v0.3.5
 - Web search: on a Viboplr with the shared web search service, the chat and "Ask AI about this…" get the app's `web_search` tool (it arrives through the host catalog, nothing to configure) and are told to search first, then read the page with `web_fetch`. With no web search plugin installed, the chat offers to add one from the gallery (you approve the install in the app). Older apps are unaffected.
 

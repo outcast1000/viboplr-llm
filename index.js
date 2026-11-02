@@ -578,6 +578,19 @@ function authHeaders() {
   return h;
 }
 
+/**
+ * The error text worth showing. OpenRouter wraps the upstream provider's
+ * reason in error.metadata.raw behind a generic "Provider returned error",
+ * so prefer that when it's there.
+ */
+function errorDetail(json, text) {
+  if (!json || !json.error) return truncate(text, 300);
+  var err = json.error;
+  var raw = err.metadata && err.metadata.raw;
+  if (typeof raw === "string" && raw.trim()) return truncate(raw.trim(), 300);
+  return err.message || JSON.stringify(err);
+}
+
 function readJson(res) {
   return Promise.resolve(res.text()).then(function (text) {
     var json = null;
@@ -587,9 +600,10 @@ function readJson(res) {
       json = null;
     }
     if (res.status < 200 || res.status >= 300) {
-      var detail = json && json.error ? (json.error.message || JSON.stringify(json.error)) : truncate(text, 300);
+      var detail = errorDetail(json, text);
       if (res.status === 401) throw new Error("The model service didn't accept the API key (HTTP 401)" + (detail ? ": " + detail : "") + ". Check the key in the Settings tab and press Save and connect.");
       if (res.status === 402) throw new Error("The model service says the account is out of credits (HTTP 402)" + (detail ? ": " + detail : "") + ". Add credits there, or pick a free model.");
+      if (res.status === 429) throw new Error("The model service is rate-limiting this model (HTTP 429)" + (detail ? ": " + detail : "") + ". Free models share a pool that fills up — try again in a while, or pick another model.");
       throw new Error("The model endpoint answered HTTP " + res.status + (detail ? ": " + detail : ""));
     }
     if (json === null) throw new Error("The model endpoint didn't answer with JSON");

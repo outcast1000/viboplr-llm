@@ -505,6 +505,22 @@ test("an out-of-credits answer says so", async () => {
   assert.ok(viewTexts(host.ui.views.assistant).some((t) => /out of credits.*Insufficient credits/.test(t)), "credit error shown");
 });
 
+test("a rate-limited free model shows the provider's reason, not 'Provider returned error'", async () => {
+  const body = {
+    error: {
+      message: "Provider returned error",
+      code: 429,
+      metadata: { raw: "google/gemma-4-31b-it:free is temporarily rate-limited upstream. Please retry shortly." },
+    },
+  };
+  const { host } = await activated({ modelReplies: [{ status: 429, body }] });
+  host.ui.actions.send({ query: "hello" });
+  await flush();
+  const texts = viewTexts(host.ui.views.assistant);
+  assert.ok(texts.some((t) => /rate-limiting.*temporarily rate-limited upstream.*another model/.test(t)), "upstream reason shown");
+  assert.ok(!texts.some((t) => /Provider returned error/.test(t)), "generic wrapper hidden");
+});
+
 test("when the model list fails, the model can be typed", async () => {
   const { host } = await activated({ modelsStatus: 401, modelReplies: [{ content: "Hi.", tool_calls: [] }] });
   host.ui.actions.tab({ tabId: "settings" });
