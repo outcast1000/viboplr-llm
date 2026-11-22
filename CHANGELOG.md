@@ -1,5 +1,8 @@
 # Changelog
 
+## v0.4.0
+- **"Find missing tracks…" is gone from the album menu.** You can still ask the assistant for an album's missing tracks in the chat.
+
 ## v0.3.6
 - A model the service is rate-limiting (HTTP 429), common with OpenRouter's free models, now says so and suggests waiting or picking another model. The error shows the provider's actual reason (e.g. "temporarily rate-limited upstream") instead of OpenRouter's generic "Provider returned error".
 

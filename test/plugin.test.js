@@ -29,7 +29,7 @@ test("activate renders the chat, registers its surfaces and checks the endpoint"
   assert.deepEqual(host.search.providers, [{ id: "ask", name: "AI Assistant" }]);
   assert.ok(host.infoHandlers.lyrics_meaning);
   assert.ok(host.tools.complete);
-  assert.deepEqual(Object.keys(host.menus).sort(), ["ask-album", "ask-artist", "ask-track", "cleanup", "fill-album", "upgrade"]);
+  assert.deepEqual(Object.keys(host.menus).sort(), ["ask-album", "ask-artist", "ask-track", "cleanup", "upgrade"]);
   assert.ok(host.calls.some((c) => c.name === "network.fetch" && /\/models$/.test(c.args[0])), "probed /models");
   assert.deepEqual(host.ui.headers.assistant.status, { variant: "success", label: "Ready" });
 });
@@ -549,12 +549,12 @@ test("a 0.1.x single API key moves to the provider its endpoint belongs to", asy
 
 test("a context-menu errand opens the view and starts its own conversation", async () => {
   const { host } = await activated({ modelReplies: [{ content: "Here's what I found.", tool_calls: [] }] });
-  host.menus["fill-album"]({ kind: "album", albumId: 9, albumTitle: "OK Computer", artistName: "Radiohead" });
+  host.menus["upgrade"]({ kind: "multi-track", trackIds: [4, 5] });
   await flush();
   assert.deepEqual(host.ui.navigated, ["assistant"]);
   const sent = host.modelRequests[0];
-  assert.match(sent.messages[1].content, /OK Computer/);
-  // fill = library + info + catalog + download + plugins: play_tracks is not in it.
+  assert.match(sent.messages[1].content, /ids 4, 5/);
+  // upgrade = library + catalog + download + files + plugins: play_tracks is not in it.
   assert.ok(!sent.tools.some((t) => t.function.name === "play_tracks"));
 });
 

@@ -63,9 +63,8 @@ test("every context-menu entry seeds a prompt with the ids it was given", () => 
   const multi = plugin._promptForMenu("upgrade", { kind: "multi-track", trackIds: [4, 5] });
   assert.equal(multi.feature, "upgrade");
   assert.match(multi.text, /ids 4, 5/);
-  const fill = plugin._promptForMenu("fill-album", { kind: "album", albumId: 9, albumTitle: "OK Computer", artistName: "Radiohead" });
-  assert.equal(fill.feature, "fill");
-  assert.match(fill.text, /"OK Computer" by Radiohead \(library album id 9\)/);
+  // "Find missing tracks…" was removed (2026-11-22): its id seeds nothing now.
+  assert.equal(plugin._promptForMenu("fill-album", { kind: "album", albumTitle: "OK Computer" }), null);
   for (const id of ["ask-track", "ask-album", "ask-artist", "cleanup"]) {
     assert.ok(plugin._promptForMenu(id, { title: "x" }), id);
   }

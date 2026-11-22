@@ -59,7 +59,6 @@ var FEATURES = {
   chat: { categories: null },
   ask: { categories: ["library"], readOnlyOnly: true },
   about: { categories: ["library", "info", "playback", "queue", "web"] },
-  fill: { categories: ["library", "info", "catalog", "download", "plugins"] },
   upgrade: { categories: ["library", "catalog", "download", "files", "plugins"] },
   cleanup: { categories: ["library", "tags"] },
   tags: { categories: ["library", "tags"] },
@@ -469,8 +468,6 @@ function promptForMenu(actionId, target) {
       return { feature: "about", text: "Tell me about the album " + album + (t.albumId ? " (library album id " + t.albumId + ")" : "") + ": when and how it was made, how it was received, and the highlights." };
     case "ask-artist":
       return { feature: "about", text: "Tell me about the artist " + (t.artistName || t.title || "this artist") + ": who they are, their key records, and where to start." };
-    case "fill-album":
-      return { feature: "fill", text: "Find the tracks I'm missing from the album " + album + (t.albumId ? " (library album id " + t.albumId + ")" : "") + ". Compare its full tracklist (get_entity_info) with my copy, then search the catalogs for each missing track and show me what you found. Ask before downloading anything." };
     case "upgrade":
       return { feature: "upgrade", text: "Look for better-quality copies of " + (ids.length > 1 ? "these library tracks (ids " + ids.join(", ") + ")" : track + (ids.length ? " (library track id " + ids[0] + ")" : "")) + ". Tell me the current format and bitrate, what better copies exist and where. Don't replace anything until I say so." };
     case "cleanup":
@@ -1407,7 +1404,7 @@ function activate(pluginApi) {
   VIEW_ACTIONS.forEach(function (id) {
     track(api.ui.onAction(id, function (data) { onViewAction(id, data); }));
   });
-  ["ask-track", "ask-album", "ask-artist", "fill-album", "upgrade", "cleanup"].forEach(function (id) {
+  ["ask-track", "ask-album", "ask-artist", "upgrade", "cleanup"].forEach(function (id) {
     track(api.contextMenu.onAction(id, function (target) { onMenuAction(id, target); }));
   });
   track(api.informationTypes.onFetch("lyrics_meaning", lyricsMeaning));
